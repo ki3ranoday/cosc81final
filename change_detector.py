@@ -9,6 +9,7 @@ import math  # use of pi.
 import numpy as np
 from enum import Enum
 from Grid import Grid
+import sys
 
 
 # import of relevant libraries.
@@ -22,9 +23,6 @@ from std_srvs.srv import SetBool, SetBoolResponse
 # Constants.
 # Topic names
 DEFAULT_CMD_VEL_TOPIC = "cmd_vel"
-DEFAULT_SCAN_TOPIC = (
-    "base_scan"  # name of topic for Stage simulator. For Gazebo, 'scan'
-)
 
 # Frequency at which the loop operates
 FREQUENCY = 10  # Hz.
@@ -36,18 +34,19 @@ LINEAR_VELOCITY = 1  # m/s
 MIN_THRESHOLD_DISTANCE = .4 # m, threshold distance, should be smaller than range_max
 WALL_DISTANCE_GOAL = .5 # m, the goal distance from the wall on the right
 
+DEFAULT_SCAN_TOPIC = "scan" if len(sys.argv) > 1 and sys.argv[1] == 'scan' else 'base_scan'  # name of topic for Stage simulator. For Gazebo, 'scan'
 # Field of view in radians that is checked in front of the robot (feel free to tune)
-MIN_SCAN_ANGLE_RAD_FRONT = -45.0 / 180 * math.pi
-MAX_SCAN_ANGLE_RAD_FRONT = +45.0 / 180 * math.pi
+MIN_SCAN_ANGLE_RAD_FRONT = -135 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -45.0 / 180 * math.pi
+MAX_SCAN_ANGLE_RAD_FRONT = 135 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else +45.0 / 180 * math.pi
+
+MIN_SCAN_ANGLE_RIGHT = 45 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -45 / 180 * math.pi
+MAX_SCAN_ANGLE_RIGHT = 135 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -135 / 180 * math.pi
 
 TURN_VELOCITY = math.pi / 8
 
 KP = 4.0
 KI = 0.0
 KD = 1.1
-
-MIN_SCAN_ANGLE_RIGHT = -45 / 180 * math.pi
-MAX_SCAN_ANGLE_RIGHT = -135 / 180 * math.pi
 
 
 class fsm(Enum):
@@ -236,6 +235,7 @@ class ChangeDetector:
 
 
 def main():
+    
     """Main function."""
 
     # 1st. initialization of node.
