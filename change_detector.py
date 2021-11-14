@@ -110,11 +110,12 @@ class ChangeDetector:
             rospy.sleep(.1) # wait for the laser callback to run before starting to move
      
     def map_callback(self, msg):
-        self.old_map = self.map
-        self.map = Grid(msg.data, msg.info.width,
-            msg.info.height, msg.info.resolution)
-        if self.detect_change():
-            self._fsm = fsm.PD_CALC_CHANGE
+        print(len(msg.data))
+        # self.old_map = self.map
+        # self.map = Grid(msg.data, msg.info.width,
+        #     msg.info.height, msg.info.resolution)
+        # if self.detect_change():
+        #     self._fsm = fsm.PD_CALC_CHANGE
         
     # detect change between our old map and our new map
     def detect_change(self):
