@@ -28,7 +28,8 @@ DEFAULT_CMD_VEL_TOPIC = "cmd_vel"
 FREQUENCY = 10  # Hz.
 
 # Velocities that will be used (feel free to tune)
-LINEAR_VELOCITY = 1  # m/s
+LINEAR_VELOCITY = .2  # m/s
+TURN_VELOCITY = math.pi / 8
 
 # Threshold of minimum clearance distance (feel free to tune)
 MIN_THRESHOLD_DISTANCE = .4 # m, threshold distance, should be smaller than range_max
@@ -42,7 +43,6 @@ MAX_SCAN_ANGLE_RAD_FRONT = 135 / 180 * math.pi if len(sys.argv) > 1 and sys.argv
 MIN_SCAN_ANGLE_RIGHT = 45 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -45 / 180 * math.pi
 MAX_SCAN_ANGLE_RIGHT = 135 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -135 / 180 * math.pi
 
-TURN_VELOCITY = math.pi / 8
 
 KP = 4.0
 KI = 0.0
