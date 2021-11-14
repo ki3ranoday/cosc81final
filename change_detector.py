@@ -5,9 +5,9 @@
 # Date: 10/13/2021
 
 # Import of python modules.
+import enum
 import math  # use of pi.
 import numpy as np
-from enum import Enum
 from Grid import Grid
 import sys
 
@@ -37,19 +37,19 @@ WALL_DISTANCE_GOAL = .5 # m, the goal distance from the wall on the right
 
 DEFAULT_SCAN_TOPIC = "scan" if len(sys.argv) > 1 and sys.argv[1] == 'scan' else 'base_scan'  # name of topic for Stage simulator. For Gazebo, 'scan'
 # Field of view in radians that is checked in front of the robot (feel free to tune)
-MIN_SCAN_ANGLE_RAD_FRONT = -135 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -45.0 / 180 * math.pi
-MAX_SCAN_ANGLE_RAD_FRONT = 135 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else +45.0 / 180 * math.pi
+MIN_SCAN_ANGLE_RAD_FRONT = 135.0 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -45.0 / 180 * math.pi
+MAX_SCAN_ANGLE_RAD_FRONT = 225.0 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else +45.0 / 180 * math.pi
 
-MIN_SCAN_ANGLE_RIGHT = 45 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -45 / 180 * math.pi
-MAX_SCAN_ANGLE_RIGHT = 135 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -135 / 180 * math.pi
+MIN_SCAN_ANGLE_RIGHT = 45.0 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -45.0 / 180 * math.pi
+MAX_SCAN_ANGLE_RIGHT = 135.0 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1] == 'scan' else -135.0 / 180 * math.pi
 
 
 KP = 4.0
 KI = 0.0
-KD = 1.1
+KD = 2.0
 
 
-class fsm(Enum):
+class fsm(enum.Enum):
     PD_CALC_CHANGE = 1 # used when we are trying to direct the robot to a change
     PD_CALC_WALL = 2 # used while the robot is following a wall
     MOVE = 3 # used to send commands for the robot to follow the wall
@@ -67,7 +67,7 @@ class ChangeDetector:
         min_threshold_distance=MIN_THRESHOLD_DISTANCE,
         wall_distance_goal = WALL_DISTANCE_GOAL,
         scan_angle_front=[MIN_SCAN_ANGLE_RAD_FRONT, MAX_SCAN_ANGLE_RAD_FRONT],
-        scan_angle_right=[MIN_SCAN_ANGLE_RAD_FRONT, MAX_SCAN_ANGLE_RAD_FRONT],
+        scan_angle_right=[MIN_SCAN_ANGLE_RIGHT, MAX_SCAN_ANGLE_RIGHT],
         kp = KP, ki = KI, kd = KD
     ):
         """Constructor."""
@@ -152,9 +152,30 @@ class ChangeDetector:
                 resp.success = False
                 resp.message = "Robot already moving"
 
-        return resp
+        return resp   
+    
+    def get_ranges(self, angle_a, angle_b, msg):
+        ranges = []
+        for i,range in enumerate(msg.ranges):
+            range_angle = msg.angle_min + msg.angle_increment * i
+            while range_angle < 0:
+                range_angle += 2 * math.pi
+                
+            while angle_a < 0:
+                angle_a += 2 * math.pi
+            
+            while angle_b < 0:
+                angle_b += 2 * math.pi
+                
+            # print('Range angle %s, angle_a %s, angle_b %s' %(range_angle, angle_a, angle_b))
+
+            if range_angle > min(angle_a, angle_b) and range_angle < max(angle_a, angle_b):
+                ranges.append(range)
+                
+        return ranges
 
     def _laser_callback(self, msg):
+        print(msg.angle_min, msg.angle_max, msg.angle_increment)
         """Processing of laser message."""
         # Access to the index of the measurement in front of the robot.
         # NOTE: assumption: the one at angle 0 corresponds to the front.
@@ -169,25 +190,12 @@ class ChangeDetector:
             self.dt = rospy.get_rostime() - self.last_callback
         self.last_callback = rospy.get_rostime()
         
-        min_index_front = int(
-            (self.scan_angle_front[0] - msg.angle_min) / msg.angle_increment
-        )
-        max_index_front = int(
-            (self.scan_angle_front[1] - msg.angle_min) / msg.angle_increment
-        )
-
-        min_index_right = int(
-            (self.scan_angle_right[0] - msg.angle_min) / msg.angle_increment
-        )
-        max_index_right = int(
-            (self.scan_angle_right[1] - msg.angle_min) / msg.angle_increment
-        )
-        error = self.wall_distance_goal - min(msg.ranges[min_index_right: max_index_right])
+        error = self.wall_distance_goal - min(self.get_ranges(self.scan_angle_right[0], self.scan_angle_right[1], msg))
         self.errors.append(error)
         
         if not self._fsm == fsm.PD_CALC_CHANGE or self._fsm == fsm.TAKING_PICTURE:
             if (
-                np.min(msg.ranges[min_index_front : max_index_front])
+                np.min(self.get_ranges(self.scan_angle_front[0], self.scan_angle_front[1], msg))
                 < self.min_threshold_distance
             ):
                 self._fsm = fsm.TURN_CALC # if theres something in front of the robot, it will turn left
