@@ -17,7 +17,8 @@ import rospy  # module for ROS APIs
 import tf
 from geometry_msgs.msg import Twist  # message type for cmd_vel
 from sensor_msgs.msg import LaserScan  # message type for scan
-from nav_msgs.msg import OccupancyGrid
+from visualization_msgs.msg import Marker
+from nav_msgs.msg import Odometry, OccupancyGrid
 from std_srvs.srv import SetBool, SetBoolResponse
 
 
@@ -84,10 +85,12 @@ class ChangeDetector:
         self.map = None
         self.old_map = None
         self.map_sub = rospy.Subscriber("map", OccupancyGrid, self.map_callback, queue_size=1)
-
+        self.marker_pub = rospy.Publisher("markers", Marker, queue_size=1000) # get rid of queue size = 1 to make sure all the markers get published
         self._on_off_service = rospy.Service(
             "on_off", SetBool, self._turn_on_off_callback
         )
+        self._odom_sub = rospy.Subscriber(
+            'odom', Odometry, self._odom_callback)
 
         # Parameters.
         self.linear_velocity = linear_velocity  # Constant linear velocity set.
@@ -102,22 +105,38 @@ class ChangeDetector:
         self.ki = ki
         self.kd = kd
         
+        self.next_id = 0
+        
         self.last_callback = None # will set this in laser callback
         self.dt = None # will set this when we have some actual data
         # fsm variable.
         self._fsm = fsm.STOP
         
-        transform_listener = tf.TransformListener()
+        self.odom_counter = 0
+        
+        self.transform_listener = tf.TransformListener()
         
         while self.last_callback == None:
             rospy.sleep(.1) # wait for the laser callback to run before starting to move
      
-    def get_robot_pose(self):
-        #self.transform_listener.waitForTransform('map','')
-        pass
+    def get_robot_pose(self, msg):
+        self.transform_listener.waitForTransform('map','odom', msg.header.stamp, rospy.Duration(0.1))
+        odom_orientation = msg.pose.pose.orientation
+        odom_position = msg.pose.pose.position
+        (trans,rot) = self.transform_listener.lookupTransform('map','odom', msg.header.stamp)
+        t = tf.transformations.translation_matrix(trans)
+        r = tf.transformations.quaternion_matrix(rot)
+        odomToMap = t.dot(r)
+        
+        robot_loc = np.array([odom_position.x, odom_position.y, 0.0, 1])
+        robot_loc_map = odomToMap.dot(np.transpose(robot_loc))
+        print(robot_loc_map)
+        # rotation_euler = tf.transformations.euler_from_quaternion(rot)
         
     def map_callback(self, msg):
-        print(len(msg.data))
+        
+        pass
+        # print(len(msg.data))
         # self.old_map = self.map
         # self.map = Grid(msg.data, msg.info.width,
         #     msg.info.height, msg.info.resolution)
@@ -180,9 +199,13 @@ class ChangeDetector:
                 ranges.append(range)
                 
         return ranges
+    
+    def _odom_callback(self, msg):
+        if self.odom_counter % 10 == 0:
+            self.get_robot_pose(msg)
+        self.odom_counter += 1
 
     def _laser_callback(self, msg):
-        print(msg.angle_min, msg.angle_max, msg.angle_increment)
         """Processing of laser message."""
         # Access to the index of the measurement in front of the robot.
         # NOTE: assumption: the one at angle 0 corresponds to the front.
@@ -221,19 +244,19 @@ class ChangeDetector:
             # Otherwise, the robot should rotate for a random amount of time
             # after which the flag is set again to False.
             # Use the function move already implemented, passing the default velocities saved in the corresponding class members.
-            print(self._fsm)
+            # print(self._fsm)
             
             # states for following wall
             if self._fsm == fsm.PD_CALC_WALL:
                 if len(self.errors) > 0:
                     error = self.errors[-1]
-                    print("Error is: %s" % error)
+                    # print("Error is: %s" % error)
                     self.linear_velocity = min(LINEAR_VELOCITY, LINEAR_VELOCITY * (1-min(abs(self.errors[-1]), 1)))
                     self.angular_velocity = self.kp * error
                     if len(self.errors) > 1 and self.dt:
                         self.angular_velocity += self.kd * ((self.errors[-1] - self.errors[-2]) / self.dt.to_sec())
                         self.angular_velocity += self.ki * (self.dt.to_sec() * sum(self.errors))
-                    print("Setting angular velocity to %s deg/s (%s rad/s)"%(self.angular_velocity * 180 / math.pi, self.angular_velocity))
+                    # print("Setting angular velocity to %s deg/s (%s rad/s)"%(self.angular_velocity * 180 / math.pi, self.angular_velocity))
                     self._fsm = fsm.MOVE
             if self._fsm == fsm.TURN_CALC:
                 # self.angular_velocity = TURN_VELOCITY if self.angular_velocity == 0 else np.sign(self.angular_velocity) * TURN_VELOCITY
