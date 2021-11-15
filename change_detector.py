@@ -20,6 +20,8 @@ from sensor_msgs.msg import LaserScan  # message type for scan
 from visualization_msgs.msg import Marker
 from nav_msgs.msg import Odometry, OccupancyGrid
 from std_srvs.srv import SetBool, SetBoolResponse
+from skimage.measure import compare_ssim  # used for change detection
+import cv2  # used for change detection
 
 
 # Constants.
@@ -60,6 +62,35 @@ class fsm(enum.Enum):
     TAKING_PICTURE = 6 # when the robot gets to a change it should enter taking picture state, then return to following wall
     
 
+class Grid:
+    def __init__(self, occupancy_grid_data, width, height, resolution):
+        reshaped = np.reshape(occupancy_grid_data, (height, width))
+
+        self.grid = np.zeros([height,width], dtype=np.uint8)
+        for row in range(height):
+            for col in range(width):
+                if reshaped[row, col] == 100:
+                    self.grid[row, col] = 0
+                elif reshaped[row, col] == 0:
+                    self.grid[row, col] = 255
+                else:
+                    self.grid[row, col] = 100
+
+        self.height = height
+        self.width = width
+        self.resolution = resolution
+
+
+        print("Grid")
+        print(self.grid)
+        print("Grid shape:", self.grid.shape)
+
+        print("MAP CREATED")
+
+
+    def cell_at(self, x, y):
+        return self.grid[y, x]
+
 
 class ChangeDetector:
     def __init__(
@@ -77,6 +108,7 @@ class ChangeDetector:
         # Setting up publishers/subscribers.
         # Setting up the publisher to send velocity commands.
         self._cmd_pub = rospy.Publisher(DEFAULT_CMD_VEL_TOPIC, Twist, queue_size=1)
+
         # Setting up subscriber receiving messages from the laser.
         self._laser_sub = rospy.Subscriber(
             DEFAULT_SCAN_TOPIC, LaserScan, self._laser_callback, queue_size=1
@@ -111,6 +143,18 @@ class ChangeDetector:
         self.dt = None # will set this when we have some actual data
         # fsm variable.
         self._fsm = fsm.STOP
+
+        # change detection state variables
+        self.start = True
+        self.map_start_x = None
+        self.map_start_y = None
+        
+        self._is_back_at_start = False
+        self._second_back_at_start = False
+        self.first_map = None
+        self.second_map = None
+        self.goal_x = None
+        self.goal_y = None
         
         self.odom_counter = 0
         
@@ -131,11 +175,44 @@ class ChangeDetector:
         robot_loc = np.array([odom_position.x, odom_position.y, 0.0, 1])
         robot_loc_map = odomToMap.dot(np.transpose(robot_loc))
         print(robot_loc_map)
+
+        # check if the robot has made it back to its starting point
+        if self.odom_counter > 50 and self.get_distance(robot_loc_map) <= 0.5:
+            print("50")
+            self._is_back_at_start = True
+
+        # if this is the first odom callback, mark the starting position within map 
+        # reference frame
+        if self.start:
+            print("Position", robot_loc_map)
+            print("Shape", robot_loc_map.shape)
+            self.map_start_x = robot_loc_map[0]
+            self.map_start_y = robot_loc_map[1]
+            # self.map_start_x = robot_loc_map.item((0,0))
+            # self.map_start_y = robot_loc_map.item((0,1))
+            self.start = False
+
         # rotation_euler = tf.transformations.euler_from_quaternion(rot)
+
+
+    def get_distance(self, current_loc):
+        dx = self.map_start_x - current_loc[0]
+        dy = self.map_start_y - current_loc[1]
+
+        return math.sqrt(dx * dx + dy * dy)
+
         
     def map_callback(self, msg):
+        # initialize first map after full loop of the room
+        if self._is_back_at_start and self.first_map is None:
+            self.first_map = Grid(msg.data, msg.info.width, msg.info.height, msg.info.resolution)
         
-        pass
+        # once first map has been saved, check for changes each time
+        elif self.first_map is not None:
+            self.second_map = Grid(msg.data, msg.info.width, msg.info.height, msg.info.resolution)
+            self.detect_change()
+        
+        
         # print(len(msg.data))
         # self.old_map = self.map
         # self.map = Grid(msg.data, msg.info.width,
@@ -145,8 +222,42 @@ class ChangeDetector:
         
     # detect change between our old map and our new map
     def detect_change(self):
-        # set self.goal x and y location of the change
-        return None
+        (score, diff) = compare_ssim(self.first_map.grid, self.second_map.grid, full=True)
+        diff = (diff * 255).astype("uint8")
+        print("SSIM: {}".format(score))
+
+        # threshold the difference image, followed by finding contours to
+        # obtain the regions of the two input images that differ
+        thresh = cv2.threshold(diff, 0, 255,
+            cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU)[1]
+        im2, cnts, hierarchy = cv2.findContours(thresh.copy(), cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE)
+
+        for c in cnts:
+            # compute the bounding box of the contour and then draw the
+            # bounding box on both input images to represent where the two
+            # images differ
+
+            (x, y, w, h) = cv2.boundingRect(c)
+            cv2.rectangle(self.first_map.grid, (x, y), (x + w, y + h), (0, 0, 255), 2)
+            cv2.rectangle(self.second_map.grid, (x, y), (x + w, y + h), (0, 0, 255), 2)
+
+            print("x: {}, y: {}, w: {}, h: {}".format(x, y, w, h))
+
+            self.goal_x = x + w/2
+            self.goal_y = y + h/2
+
+            if w > 100 or h > 100:
+                print("Big Change")
+
+
+        
+        # cv2.imshow("Original", self.first_map.grid)
+        # cv2.imshow("Change", self.second_map.grid)
+        # cv2.imshow("Diff", diff)
+        # cv2.imshow("Thresh", thresh)
+        # cv2.waitKey(0)
+
 
     def move(self, linear_vel, angular_vel):
         """Send a velocity command (linear vel in m/s, angular vel in rad/s)."""
