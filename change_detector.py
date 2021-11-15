@@ -158,6 +158,8 @@ class ChangeDetector:
         
         self.odom_counter = 0
         
+        self.map_meta_data = None
+        
         self.transform_listener = tf.TransformListener()
         
         while self.last_callback == None:
@@ -205,6 +207,7 @@ class ChangeDetector:
     def map_callback(self, msg):
         # initialize first map after full loop of the room
         if self._is_back_at_start and self.first_map is None:
+            self.map_meta_data = msg.info
             self.first_map = Grid(msg.data, msg.info.width, msg.info.height, msg.info.resolution)
         
         # once first map has been saved, check for changes each time
@@ -243,20 +246,52 @@ class ChangeDetector:
             cv2.rectangle(self.second_map.grid, (x, y), (x + w, y + h), (0, 0, 255), 2)
 
             print("x: {}, y: {}, w: {}, h: {}".format(x, y, w, h))
+            
+            center_x = x + w/2
+            center_y = y + h/2
 
-            self.goal_x = x + w/2
-            self.goal_y = y + h/2
-
-            if w > 100 or h > 100:
+            if w > 50 or h > 50:
                 print("Big Change")
+                self.goal_x, self.goal_y = self.imageToMapFrame(center_x, center_y)
+                print(center_x, center_y, self.goal_x, self.goal_y)
+                self.publish_marker(self.goal_x, self.goal_y)
 
-
-        
         # cv2.imshow("Original", self.first_map.grid)
         # cv2.imshow("Change", self.second_map.grid)
         # cv2.imshow("Diff", diff)
         # cv2.imshow("Thresh", thresh)
         # cv2.waitKey(0)
+    
+    # takes a cell in the image and converts it to a coordinate in the map frame
+    def imageToMapFrame(self,x,y):
+        origin_x = self.map_meta_data.origin.position.x
+        origin_y = self.map_meta_data.origin.position.y
+        
+        new_x = origin_x + x * self.map_meta_data.resolution
+        new_y = origin_y + y * self.map_meta_data.resolution
+        
+        return new_x, new_y
+       
+    # publishes a marker to the map 
+    def publish_marker(self, x, y):
+        """Publishing an arrow at x, y facing theta"""
+        marker_msg = Marker()
+        marker_msg.header.stamp = rospy.Time.now()
+        marker_msg.header.frame_id = "map"
+        
+        marker_msg.action = Marker.ADD
+        marker_msg.type = Marker.CYLINDER
+        marker_msg.id = self.next_id
+        self.next_id += 1
+        marker_msg.pose.position.x = x
+        marker_msg.pose.position.y = y
+        marker_msg.color.g = 1.0
+        marker_msg.color.a = 1
+        marker_msg.scale.x = .1
+        marker_msg.scale.y = .1
+        marker_msg.scale.z = .1
+        print(marker_msg)
+        self.marker_pub.publish(marker_msg)
 
 
     def move(self, linear_vel, angular_vel):
