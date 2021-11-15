@@ -14,6 +14,7 @@ import sys
 
 # import of relevant libraries.
 import rospy  # module for ROS APIs
+import tf
 from geometry_msgs.msg import Twist  # message type for cmd_vel
 from sensor_msgs.msg import LaserScan  # message type for scan
 from nav_msgs.msg import OccupancyGrid
@@ -32,8 +33,8 @@ LINEAR_VELOCITY = .2  # m/s
 TURN_VELOCITY = math.pi / 8
 
 # Threshold of minimum clearance distance (feel free to tune)
-MIN_THRESHOLD_DISTANCE = .4 # m, threshold distance, should be smaller than range_max
-WALL_DISTANCE_GOAL = .5 # m, the goal distance from the wall on the right
+MIN_THRESHOLD_DISTANCE = .3 # m, threshold distance, should be smaller than range_max
+WALL_DISTANCE_GOAL = .4 # m, the goal distance from the wall on the right
 
 DEFAULT_SCAN_TOPIC = "scan" if len(sys.argv) > 1 and sys.argv[1] == 'scan' else 'base_scan'  # name of topic for Stage simulator. For Gazebo, 'scan'
 # Field of view in radians that is checked in front of the robot (feel free to tune)
@@ -46,7 +47,7 @@ MAX_SCAN_ANGLE_RIGHT = 135.0 / 180 * math.pi if len(sys.argv) > 1 and sys.argv[1
 
 KP = 4.0
 KI = 0.0
-KD = 2.0
+KD = 1.1
 
 
 class fsm(enum.Enum):
@@ -97,18 +98,24 @@ class ChangeDetector:
         self.scan_angle_right = scan_angle_right
         
         self.errors = []
-        self.kp = self.wall_distance_goal * kp
-        self.ki = self.wall_distance_goal * ki
-        self.kd = self.wall_distance_goal * kd
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
         
         self.last_callback = None # will set this in laser callback
         self.dt = None # will set this when we have some actual data
         # fsm variable.
         self._fsm = fsm.STOP
         
+        transform_listener = tf.TransformListener()
+        
         while self.last_callback == None:
             rospy.sleep(.1) # wait for the laser callback to run before starting to move
      
+    def get_robot_pose(self):
+        #self.transform_listener.waitForTransform('map','')
+        pass
+        
     def map_callback(self, msg):
         print(len(msg.data))
         # self.old_map = self.map
@@ -221,7 +228,7 @@ class ChangeDetector:
                 if len(self.errors) > 0:
                     error = self.errors[-1]
                     print("Error is: %s" % error)
-                    self.linear_velocity = LINEAR_VELOCITY
+                    self.linear_velocity = min(LINEAR_VELOCITY, LINEAR_VELOCITY * (1-min(abs(self.errors[-1]), 1)))
                     self.angular_velocity = self.kp * error
                     if len(self.errors) > 1 and self.dt:
                         self.angular_velocity += self.kd * ((self.errors[-1] - self.errors[-2]) / self.dt.to_sec())
@@ -229,6 +236,7 @@ class ChangeDetector:
                     print("Setting angular velocity to %s deg/s (%s rad/s)"%(self.angular_velocity * 180 / math.pi, self.angular_velocity))
                     self._fsm = fsm.MOVE
             if self._fsm == fsm.TURN_CALC:
+                # self.angular_velocity = TURN_VELOCITY if self.angular_velocity == 0 else np.sign(self.angular_velocity) * TURN_VELOCITY
                 self.angular_velocity = TURN_VELOCITY
                 self.linear_velocity = 0
                 self._fsm = fsm.MOVE
