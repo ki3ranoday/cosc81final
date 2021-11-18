@@ -1,8 +1,8 @@
 #!/usr/bin/env python
-# Citation: I am using the pa0_random_walk_fsm from class as a jumping off point!!!!
+# Citation: Using Kieran O'Day's pa2 code from class as a jumping off point!!!!
 
-# Author: Kieran O'Day
-# Date: 10/13/2021
+# Author: Kieran O'Day, Nick Schoeller, Jonah Kershen, Ryan Alu
+# Date: 11/15/2021
 
 # Import of python modules.
 import enum
@@ -60,12 +60,19 @@ class fsm(enum.Enum):
     TURN_CALC = 4 # used to 
     STOP = 5 # stops the robot
     TAKING_PICTURE = 6 # when the robot gets to a change it should enter taking picture state, then return to following wall
+    TURN_TO_GOAL = 7
+    GO_TO_GOAL = 8
     
 
 class Grid:
     def __init__(self, occupancy_grid_data, width, height, resolution):
         reshaped = np.reshape(occupancy_grid_data, (height, width))
-
+        
+        x_min = float('inf')
+        x_max = float('-inf')
+        y_min = float('inf')
+        y_max = float('-inf')
+        
         self.grid = np.zeros([height,width], dtype=np.uint8)
         for row in range(height):
             for col in range(width):
@@ -75,7 +82,6 @@ class Grid:
                     self.grid[row, col] = 255
                 else:
                     self.grid[row, col] = 100
-
         self.height = height
         self.width = width
         self.resolution = resolution
@@ -114,8 +120,6 @@ class ChangeDetector:
             DEFAULT_SCAN_TOPIC, LaserScan, self._laser_callback, queue_size=1
         )
         
-        self.map = None
-        self.old_map = None
         self.map_sub = rospy.Subscriber("map", OccupancyGrid, self.map_callback, queue_size=1)
         self.marker_pub = rospy.Publisher("markers", Marker, queue_size=1000) # get rid of queue size = 1 to make sure all the markers get published
         self._on_off_service = rospy.Service(
@@ -127,10 +131,10 @@ class ChangeDetector:
         # Parameters.
         self.linear_velocity = linear_velocity  # Constant linear velocity set.
         self.angular_velocity = angular_velocity  # Constant angular velocity set.
-        self.min_threshold_distance = min_threshold_distance
-        self.wall_distance_goal = wall_distance_goal
-        self.scan_angle_front = scan_angle_front
-        self.scan_angle_right = scan_angle_right
+        self.min_threshold_distance = min_threshold_distance # min distance to the wall before turning around
+        self.wall_distance_goal = wall_distance_goal # the distance from the right wall that the robot 
+        self.scan_angle_front = scan_angle_front # the scan angles to consider in the front direction
+        self.scan_angle_right = scan_angle_right # the scan angles to consider in the right direction
         
         self.errors = []
         self.kp = kp
@@ -150,7 +154,6 @@ class ChangeDetector:
         self.map_start_y = None
         
         self._is_back_at_start = False
-        self._second_back_at_start = False
         self.first_map = None
         self.second_map = None
         self.goal_x = None
@@ -168,18 +171,27 @@ class ChangeDetector:
     def get_robot_pose(self, msg):
         self.transform_listener.waitForTransform('map','odom', msg.header.stamp, rospy.Duration(0.1))
         odom_orientation = msg.pose.pose.orientation
+        
         odom_position = msg.pose.pose.position
         (trans,rot) = self.transform_listener.lookupTransform('map','odom', msg.header.stamp)
+        
         t = tf.transformations.translation_matrix(trans)
         r = tf.transformations.quaternion_matrix(rot)
         odomToMap = t.dot(r)
         
         robot_loc = np.array([odom_position.x, odom_position.y, 0.0, 1])
         robot_loc_map = odomToMap.dot(np.transpose(robot_loc))
-        print(robot_loc_map)
+        
+        self.robot_x = robot_loc_map[0]
+        self.robot_y = robot_loc_map[1]
+        
+        odom_orientation_euler = tf.transformations.euler_from_quaternion((odom_orientation.x, odom_orientation.y, odom_orientation.z, odom_orientation.w))
+        rot_euler = tf.transformations.euler_from_quaternion(rot)
+        
+        self.robot_theta = odom_orientation_euler[2] + rot_euler[2]
 
         # check if the robot has made it back to its starting point
-        if self.odom_counter > 50 and self.get_distance(robot_loc_map) <= 0.5:
+        if self.odom_counter > 50 and self.get_distance(robot_loc_map) <= 0.2:
             print("50")
             self._is_back_at_start = True
 
@@ -190,13 +202,11 @@ class ChangeDetector:
             print("Shape", robot_loc_map.shape)
             self.map_start_x = robot_loc_map[0]
             self.map_start_y = robot_loc_map[1]
-            # self.map_start_x = robot_loc_map.item((0,0))
-            # self.map_start_y = robot_loc_map.item((0,1))
             self.start = False
 
         # rotation_euler = tf.transformations.euler_from_quaternion(rot)
 
-
+    # checks the distance between the robot and where the robot started, to be used for map completion
     def get_distance(self, current_loc):
         dx = self.map_start_x - current_loc[0]
         dy = self.map_start_y - current_loc[1]
@@ -215,17 +225,12 @@ class ChangeDetector:
             self.second_map = Grid(msg.data, msg.info.width, msg.info.height, msg.info.resolution)
             self.detect_change()
         
-        
-        # print(len(msg.data))
-        # self.old_map = self.map
-        # self.map = Grid(msg.data, msg.info.width,
-        #     msg.info.height, msg.info.resolution)
-        # if self.detect_change():
-        #     self._fsm = fsm.PD_CALC_CHANGE
-        
     # detect change between our old map and our new map
     def detect_change(self):
-        (score, diff) = compare_ssim(self.first_map.grid, self.second_map.grid, full=True)
+        first_map_blurred = cv2.GaussianBlur(self.first_map.grid,(7,7),0)
+        second_map_blurred = cv2.GaussianBlur(self.second_map.grid,(7,7),0)
+
+        (score, diff) = compare_ssim(first_map_blurred, second_map_blurred, full=True)
         diff = (diff * 255).astype("uint8")
         print("SSIM: {}".format(score))
 
@@ -250,17 +255,20 @@ class ChangeDetector:
             center_x = x + w/2
             center_y = y + h/2
 
-            if w > 50 or h > 50:
+            if w > .1/self.first_map.resolution and w < 1/self.first_map.resolution or h > .1/self.first_map.resolution and h < 1/self.first_map.resolution:
                 print("Big Change")
                 self.goal_x, self.goal_y = self.imageToMapFrame(center_x, center_y)
-                print(center_x, center_y, self.goal_x, self.goal_y)
-                self.publish_marker(self.goal_x, self.goal_y)
-
-        # cv2.imshow("Original", self.first_map.grid)
-        # cv2.imshow("Change", self.second_map.grid)
-        # cv2.imshow("Diff", diff)
-        # cv2.imshow("Thresh", thresh)
-        # cv2.waitKey(0)
+                x1,y1 = self.imageToMapFrame(x, y)
+                x2,y2 = self.imageToMapFrame(x + w, y)
+                x3,y3 = self.imageToMapFrame(x + w, y + h)
+                x4,y4 = self.imageToMapFrame(x, y + h)
+                # publish red markers to show the bounding box of the change
+                self.publish_marker(x1, y1, r = 1)
+                self.publish_marker(x2, y2, r = 1)
+                self.publish_marker(x3, y3, r = 1)
+                self.publish_marker(x4, y4, r = 1)
+                # publish a green marker to show the middle of the change
+                self.publish_marker(self.goal_x, self.goal_y, g = 1)
     
     # takes a cell in the image and converts it to a coordinate in the map frame
     def imageToMapFrame(self,x,y):
@@ -273,7 +281,7 @@ class ChangeDetector:
         return new_x, new_y
        
     # publishes a marker to the map 
-    def publish_marker(self, x, y):
+    def publish_marker(self, x, y, r = 0, g = 0, b = 0):
         """Publishing an arrow at x, y facing theta"""
         marker_msg = Marker()
         marker_msg.header.stamp = rospy.Time.now()
@@ -285,12 +293,13 @@ class ChangeDetector:
         self.next_id += 1
         marker_msg.pose.position.x = x
         marker_msg.pose.position.y = y
-        marker_msg.color.g = 1.0
+        marker_msg.color.r = r
+        marker_msg.color.g = g
+        marker_msg.color.b = b
         marker_msg.color.a = 1
         marker_msg.scale.x = .1
         marker_msg.scale.y = .1
         marker_msg.scale.z = .1
-        print(marker_msg)
         self.marker_pub.publish(marker_msg)
 
 
@@ -369,7 +378,7 @@ class ChangeDetector:
         error = self.wall_distance_goal - min(self.get_ranges(self.scan_angle_right[0], self.scan_angle_right[1], msg))
         self.errors.append(error)
         
-        if not self._fsm == fsm.PD_CALC_CHANGE or self._fsm == fsm.TAKING_PICTURE:
+        if not (self._fsm == fsm.TURN_TO_GOAL or self._fsm == fsm.GO_TO_GOAL or self._fsm == fsm.TAKING_PICTURE):
             if (
                 np.min(self.get_ranges(self.scan_angle_front[0], self.scan_angle_front[1], msg))
                 < self.min_threshold_distance
@@ -391,6 +400,8 @@ class ChangeDetector:
             # after which the flag is set again to False.
             # Use the function move already implemented, passing the default velocities saved in the corresponding class members.
             # print(self._fsm)
+            if self.goal_x != None and self.goal_y != None:
+                self._fsm = fsm.TURN_TO_GOAL
             
             # states for following wall
             if self._fsm == fsm.PD_CALC_WALL:
@@ -409,6 +420,32 @@ class ChangeDetector:
                 self.angular_velocity = TURN_VELOCITY
                 self.linear_velocity = 0
                 self._fsm = fsm.MOVE
+            if self._fsm == fsm.TURN_TO_GOAL:
+                goal_theta = math.atan2(self.goal_y - self.robot_y, self.goal_x - self.robot_x)
+                angle = goal_theta - self.robot_theta
+                
+                if abs(angle) > math.pi:
+                    angle = angle - np.sign(angle) * 2 * math.pi
+                    
+                if abs(angle) > math.pi/8:
+                    self.linear_velocity = 0
+                    self.angular_velocity = TURN_VELOCITY * np.sign(angle)
+                    self._fsm = fsm.MOVE
+                else:
+                    self._fsm = fsm.GO_TO_GOAL
+            if self._fsm == fsm.GO_TO_GOAL:
+                goal_dist = math.sqrt((self.goal_x - self.robot_x) ** 2 + (self.goal_y - self.robot_y) ** 2)
+                if goal_dist > .5:
+                    self.linear_velocity = LINEAR_VELOCITY
+                    self.angular_velocity = 0
+                    self._fsm = fsm.MOVE
+                else:
+                    self._fsm = fsm.TAKING_PICTURE
+            if self._fsm == fsm.TAKING_PICTURE:
+                # We ended up not actually taking a picture, just going to the change position and stopping there,
+                # We chose not to take a picture because the change detector worked best for removals of objects, not additions
+                # so taking a picture of nothing doesn't make much sense
+                self._fsm = fsm.STOP
             if self._fsm == fsm.MOVE:
                 self.move(self.linear_velocity, self.angular_velocity)
             if self._fsm == fsm.STOP:
