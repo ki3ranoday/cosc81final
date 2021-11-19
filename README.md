@@ -8,6 +8,11 @@ Final Project for the FA 21 COSC 81/281 Principles of Robotics class.
 2. then run `rosrun gmapping slam_gmapping scan:=base_scan _xmax:=10 _ymax:=10 _delta:=0.1` if you are working in simulation or `rosrun gmapping slam_gmapping scan:=scan _xmax:=10 _ymax:=10 _delta:=0.1` if working on the real robot
 3. this will listen for laser readings and publish the occupancy grid as it comes in
 
+## How to install change detection packages
+1. run `docker-compose exec ros bash`  
+2. to install opencv, run the command `sudo apt install python-opencv`
+3. to install scikit-image, run the command `sudo apt install python-skimage-lib`
+
 ## How to run the Change Detector
 For detailed instructions, go [here](https://www.overleaf.com/project/5da4b7b87a7dd90001b4618a)
 1. If working on the real robot, connect to the robot over ssh:
