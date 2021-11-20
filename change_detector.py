@@ -68,11 +68,7 @@ class Grid:
     def __init__(self, occupancy_grid_data, width, height, resolution):
         reshaped = np.reshape(occupancy_grid_data, (height, width))
         
-        x_min = float('inf')
-        x_max = float('-inf')
-        y_min = float('inf')
-        y_max = float('-inf')
-        
+        # generate numpy array representation of the grid to be used by cv2 for change detection
         self.grid = np.zeros([height,width], dtype=np.uint8)
         for row in range(height):
             for col in range(width):
@@ -85,17 +81,6 @@ class Grid:
         self.height = height
         self.width = width
         self.resolution = resolution
-
-
-        print("Grid")
-        print(self.grid)
-        print("Grid shape:", self.grid.shape)
-
-        print("MAP CREATED")
-
-
-    def cell_at(self, x, y):
-        return self.grid[y, x]
 
 
 class ChangeDetector:
@@ -149,17 +134,17 @@ class ChangeDetector:
         self._fsm = fsm.STOP
 
         # change detection state variables
-        self.start = True
-        self.map_start_x = None
-        self.map_start_y = None
+        self.start = True 
+        self.map_start_x = None # starting x position, set in get_robot_pose
+        self.map_start_y = None # starting y position, set in get_robot_pose
         
-        self._is_back_at_start = False
-        self.first_map = None
-        self.second_map = None
-        self.goal_x = None
-        self.goal_y = None
+        self._is_back_at_start = False # flag to determine if robot has made a full loop
+        self.first_map = None # map from first pass, set in map callback
+        self.second_map = None # subsequent maps used to detect changes
+        self.goal_x = None # x coordinate of detected change
+        self.goal_y = None # y coordinate of detected change
         
-        self.odom_counter = 0
+        self.odom_counter = 0 # used to help establish when robot has made a full loop
         
         self.map_meta_data = None
         
@@ -167,7 +152,8 @@ class ChangeDetector:
         
         while self.last_callback == None:
             rospy.sleep(.1) # wait for the laser callback to run before starting to move
-     
+    
+    
     def get_robot_pose(self, msg):
         self.transform_listener.waitForTransform('map','odom', msg.header.stamp, rospy.Duration(0.1))
         odom_orientation = msg.pose.pose.orientation
@@ -204,8 +190,6 @@ class ChangeDetector:
             self.map_start_y = robot_loc_map[1]
             self.start = False
 
-        # rotation_euler = tf.transformations.euler_from_quaternion(rot)
-
     # checks the distance between the robot and where the robot started, to be used for map completion
     def get_distance(self, current_loc):
         dx = self.map_start_x - current_loc[0]
@@ -213,7 +197,7 @@ class ChangeDetector:
 
         return math.sqrt(dx * dx + dy * dy)
 
-        
+    # initializes Grid objects to be used for change detection
     def map_callback(self, msg):
         # initialize first map after full loop of the room
         if self._is_back_at_start and self.first_map is None:
@@ -226,13 +210,13 @@ class ChangeDetector:
             self.detect_change()
         
     # detect change between our old map and our new map
+    # code adapted from https://www.pyimagesearch.com/2017/06/19/image-difference-with-opencv-and-python/
     def detect_change(self):
         first_map_blurred = cv2.GaussianBlur(self.first_map.grid,(7,7),0)
         second_map_blurred = cv2.GaussianBlur(self.second_map.grid,(7,7),0)
 
         (score, diff) = compare_ssim(first_map_blurred, second_map_blurred, full=True)
         diff = (diff * 255).astype("uint8")
-        print("SSIM: {}".format(score))
 
         # threshold the difference image, followed by finding contours to
         # obtain the regions of the two input images that differ
@@ -301,8 +285,7 @@ class ChangeDetector:
         marker_msg.scale.y = .1
         marker_msg.scale.z = .1
         self.marker_pub.publish(marker_msg)
-
-
+    
     def move(self, linear_vel, angular_vel):
         """Send a velocity command (linear vel in m/s, angular vel in rad/s)."""
         # Setting velocities.
